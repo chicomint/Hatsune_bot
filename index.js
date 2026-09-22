@@ -7,7 +7,6 @@ const { osuGet } = require('./osu');
 
 mongoose.set('bufferCommands', false);
 const P = PermissionsBitField.Flags;
-const prefix = process.env.PREFIX || '.';
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMembers],
@@ -31,9 +30,10 @@ function isAdmin(message) {
   return message.author.id === message.guild.ownerId || message.member?.permissions.has(P.Administrator);
 }
 function canConfigureGuild(message) {
-  if (!message.guild || !message.member) return false;
-  return message.author.id === process.env.OWNER_ID
-    || message.guild.ownerId === message.author.id
+  const user = message.author || message.user;
+  if (!message.guild || !message.member || !user) return false;
+  return user.id === process.env.OWNER_ID
+    || message.guild.ownerId === user.id
     || message.member.permissions.has(P.Administrator);
 }
 function canSend(channel) {
@@ -48,6 +48,12 @@ async function send(channel, payload) {
   catch { logFailure('Sending message'); return null; }
 }
 function reply(message, content) { return send(message.channel, content); }
+async function interactionReply(interaction, content, ephemeral = false) {
+  try {
+    if (interaction.replied || interaction.deferred) return interaction.followUp({ content, ephemeral });
+    return interaction.reply({ content, ephemeral });
+  } catch { logFailure('Sending interaction reply'); return null; }
+}
 
 // Keep messages and configuration changes in arrival order within each guild.
 function inGuildOrder(guildId, task) {
@@ -87,74 +93,59 @@ async function saveGuild(guildId, changes) {
   return Guild.findOneAndUpdate({ guildId }, changes, { upsert: true, new: true, runValidators: true });
 }
 
-async function configure(message, command, args) {
-  if (!canConfigureGuild(message)) return reply(message, 'Only the server owner, an Administrator, or the bot owner can configure this.');
-  const guildId = message.guild.id;
-  const cancel = args.toLowerCase() === 'cancel';
+async function configureSlash(interaction, command) {
+  if (!canConfigureGuild(interaction)) return interactionReply(interaction, 'Only the server owner, an Administrator, or the bot owner can configure this.', true);
+  const guildId = interaction.guild.id;
   if (command === 'set') {
-    const match = /^countdown\s+(\S+)$/i.exec(args);
-    if (!match) return reply(message, `Use ${prefix}set countdown GMT+7 or ${prefix}set countdown cancel.`);
-    if (match[1].toLowerCase() === 'cancel') {
-      await Guild.updateOne({ guildId }, { $unset: { countdown: 1 } });
-      return reply(message, 'Countdown disabled for this server.');
-    }
-    const offset = parseOffset(match[1]);
-    if (offset === null) return reply(message, 'Use GMT+7, +7, UTC-5, or UTC+5:30 (UTC-12 to UTC+14).');
-    if (!canSend(message.channel)) return;
-    // Preserve lastSentDate when reconfiguring to avoid a second post today.
-    await saveGuild(guildId, { $set: {
-      'countdown.enabled': true, 'countdown.channelId': message.channel.id,
-      'countdown.utcOffsetMinutes': offset,
-    } });
-    return reply(message, 'Daily New Year countdown enabled in this channel.');
+    const timezone = interaction.options.getString('timezone');
+    const cancel = interaction.options.getBoolean('cancel');
+    if (cancel) { await Guild.updateOne({ guildId }, { $unset: { countdown: 1 } }); return interactionReply(interaction, 'Countdown disabled for this server.', true); }
+    const offset = parseOffset(timezone || '');
+    if (offset === null) return interactionReply(interaction, 'Use GMT+7, UTC-5, or UTC+5:30 (UTC-12 to UTC+14).', true);
+    if (!canSend(interaction.channel)) return interactionReply(interaction, 'I cannot send messages in this channel.', true);
+    await saveGuild(guildId, { $set: { 'countdown.enabled': true, 'countdown.channelId': interaction.channelId, 'countdown.utcOffsetMinutes': offset } });
+    return interactionReply(interaction, 'Daily New Year countdown enabled in this channel.', true);
   }
   if (command === 'number') {
-    if (args && !cancel) return reply(message, `Use ${prefix}number or ${prefix}number cancel.`);
-    if (cancel) {
-      await Guild.updateOne({ guildId }, { $unset: { counting: 1 } });
-      return reply(message, 'Counting disabled for this server.');
-    }
-    if (!canSend(message.channel)) return;
-    await saveGuild(guildId, { $set: { counting: {
-      enabled: true, channelId: message.channel.id, currentNumber: 0, lastUserId: null,
-    } } });
-    return reply(message, 'Counting enabled! Start at 1. Consecutive turns are allowed.');
+    if (interaction.options.getBoolean('cancel')) { await Guild.updateOne({ guildId }, { $unset: { counting: 1 } }); return interactionReply(interaction, 'Counting disabled for this server.', true); }
+    if (!canSend(interaction.channel)) return interactionReply(interaction, 'I cannot send messages in this channel.', true);
+    await saveGuild(guildId, { $set: { counting: { enabled: true, channelId: interaction.channelId, currentNumber: 0, lastUserId: null } } });
+    return interactionReply(interaction, 'Counting enabled! Start at 1. Consecutive turns are allowed.', true);
   }
   if (command === 'rule') {
-    if (cancel) {
-      await Guild.updateOne({ guildId }, { $unset: { autoRoleId: 1 } });
-      return reply(message, 'Auto-role disabled. Existing roles were not removed.');
-    }
-    const match = /^<@&(\d+)>$/.exec(args);
-    if (!match) return reply(message, `Use ${prefix}rule @role or ${prefix}rule cancel.`);
-    const role = await message.guild.roles.fetch(match[1]).catch(() => null);
-    const me = await message.guild.members.fetchMe();
-    if (!me.permissions.has(P.ManageRoles)) return reply(message, 'I need Manage Roles permission.');
-    if (!role || role.id === guildId) return reply(message, 'Mention a role from this server other than @everyone.');
-    if (role.managed) return reply(message, 'Managed/integration roles cannot be assigned.');
-    if (me.roles.highest.comparePositionTo(role) <= 0 || !role.editable) {
-      return reply(message, 'Move my highest role above the role you want me to assign.');
-    }
+    if (interaction.options.getBoolean('cancel')) { await Guild.updateOne({ guildId }, { $unset: { autoRoleId: 1 } }); return interactionReply(interaction, 'Auto-role disabled. Existing roles were not removed.', true); }
+    const role = await interaction.options.getRole('role');
+    const me = await interaction.guild.members.fetchMe();
+    if (!me.permissions.has(P.ManageRoles)) return interactionReply(interaction, 'I need Manage Roles permission.', true);
+    if (!role || role.id === guildId) return interactionReply(interaction, 'Choose a role from this server other than @everyone.', true);
+    if (role.managed) return interactionReply(interaction, 'Managed/integration roles cannot be assigned.', true);
+    if (me.roles.highest.comparePositionTo(role) <= 0 || !role.editable) return interactionReply(interaction, 'Move my highest role above the role you want me to assign.', true);
     await saveGuild(guildId, { $set: { autoRoleId: role.id } });
-    return reply(message, `Auto-role enabled: <@&${role.id}>.`);
+    return interactionReply(interaction, `Auto-role enabled: <@&${role.id}>.`, true);
   }
   if (command === 'delink') {
-    if (cancel) {
-      await Guild.updateOne({ guildId }, { $unset: { antiLinkChannelId: 1 } });
-      return reply(message, 'Anti-link disabled for this server.');
-    }
-    const match = /^<#(\d+)>$/.exec(args);
-    if (!match) return reply(message, `Use ${prefix}delink #chat or ${prefix}delink cancel.`);
-    const channel = await message.guild.channels.fetch(match[1]).catch(() => null);
-    if (!channel || channel.guildId !== guildId || !canSend(channel)) {
-      return reply(message, 'Choose a text channel in this server where I can view and send messages.');
-    }
-    if (!channel.permissionsFor(client.user)?.has(P.ManageMessages)) {
-      return reply(message, 'I need Manage Messages permission in that channel.');
-    }
+    if (interaction.options.getBoolean('cancel')) { await Guild.updateOne({ guildId }, { $unset: { antiLinkChannelId: 1 } }); return interactionReply(interaction, 'Anti-link disabled for this server.', true); }
+    const channel = await interaction.options.getChannel('channel');
+    if (!channel || channel.guildId !== guildId || !canSend(channel)) return interactionReply(interaction, 'Choose a text channel in this server where I can view and send messages.', true);
+    if (!channel.permissionsFor(client.user)?.has(P.ManageMessages)) return interactionReply(interaction, 'I need Manage Messages permission in that channel.', true);
     await saveGuild(guildId, { $set: { antiLinkChannelId: channel.id } });
-    return reply(message, `Anti-link enabled in <#${channel.id}>. Owner/Admin messages are exempt.`);
+    return interactionReply(interaction, `Anti-link enabled in <#${channel.id}>. Owner/Admin messages are exempt.`, true);
   }
+}
+// Kept as a small test/helper adapter; production configuration is dispatched only through interactions.
+async function configure(message, command, args) {
+  const options = new Map();
+  const value = args === 'cancel' ? true : args;
+  if (command === 'set') { options.set('cancel', args === 'countdown cancel'); options.set('timezone', args.split(/\s+/).pop()); }
+  if (command === 'number' || command === 'rule' || command === 'delink') options.set('cancel', args === 'cancel');
+  const interaction = { ...message, user: message.author, commandName: command, channelId: message.channel.id,
+    isChatInputCommand: () => true, replied: false, deferred: false,
+    options: { getString: name => options.get(name) || null, getBoolean: name => options.get(name) || false,
+      getRole: () => message.guild.roles?.fetch ? message.guild.roles.fetch((args.match(/\d+/) || [])[0]) : null,
+      getChannel: () => message.guild.channels?.fetch ? message.guild.channels.fetch((args.match(/\d+/) || [])[0]) : null },
+    reply: content => { message.sent?.push(content.content); return content; },
+  };
+  return configureSlash(interaction, command);
 }
 
 async function moderateLink(message, settings) {
@@ -195,8 +186,10 @@ async function countMessage(message, settings) {
 }
 
 async function osuCommand(message, args) {
-  if (onCooldown(osuCooldowns, message.author.id, seconds('OSU_COMMAND_COOLDOWN_SECONDS', 5))) {
-    return reply(message, 'Please wait a few seconds before using osu! again.');
+  const respond = (content) => message.isChatInputCommand?.() ? interactionReply(message, content) : reply(message, content);
+  const actor = message.author || message.user;
+  if (onCooldown(osuCooldowns, actor.id, seconds('OSU_COMMAND_COOLDOWN_SECONDS', 5))) {
+    return respond('Please wait a few seconds before using osu! again.');
   }
   let targetUsername;
   let targetUserId;
@@ -204,27 +197,27 @@ async function osuCommand(message, args) {
     if (/^add(?:\s|$)/i.test(args)) {
       const match = /^add\s+(?:"([^"\r\n]+)"|([^"\r\n]+))$/i.exec(args);
       const username = (match?.[1] || match?.[2] || '').trim();
-      if (!username || username.length > 32) return reply(message, `Use ${prefix}osu add "username".`);
+      if (!username || username.length > 32) return respond('Use /osu add with a username.');
       targetUsername = username;
       const user = await osuGet(`/users/${encodeURIComponent(username)}/osu?key=username`);
-      await User.findOneAndUpdate({ discordUserId: message.author.id }, { $set: {
+      await User.findOneAndUpdate({ discordUserId: actor.id }, { $set: {
         osuUsername: user.username, osuUserId: String(user.id),
       } }, { upsert: true, runValidators: true });
-      return reply(message, `Connected your osu! account: ${user.username}.`);
+      return respond(`Connected your osu! account: ${user.username}.`);
     }
     if (args) {
       const match = /^(?:"([^"\r\n]+)"|([^"\r\n]+))$/.exec(args);
       targetUsername = (match?.[1] || match?.[2] || '').trim();
-      if (!targetUsername || targetUsername.length > 32) return reply(message, `Use ${prefix}osu <username>.`);
+      if (!targetUsername || targetUsername.length > 32) return respond('Use /osu with a username.');
     } else {
       const saved = await User.findOne({ discordUserId: message.author.id }).lean();
-      if (!saved) return reply(message, `You haven't connected your osu! account yet.\n\nUse:\n${prefix}osu add "username"`);
+      if (!saved) return respond("You haven't connected your osu! account yet.\n\nUse:\n/osu add username");
       targetUserId = saved.osuUserId;
     }
     const user = await osuGet(`/users/${encodeURIComponent(targetUserId || targetUsername)}/osu?key=${targetUserId ? 'id' : 'username'}`);
     const scores = await osuGet(`/users/${encodeURIComponent(user.id)}/scores/recent?mode=osu&include_fails=1&limit=1`);
     const score = scores[0];
-    if (!score) return reply(message, `No recent osu! Standard plays found for ${user.username}.`);
+    if (!score) return respond(`No recent osu! Standard plays found for ${user.username}.`);
     const map = score.beatmap;
     const set = score.beatmapset;
     const mods = (score.mods || []).map(mod => typeof mod === 'string' ? mod : mod.acronym).join(', ') || 'None';
@@ -243,7 +236,7 @@ async function osuCommand(message, args) {
       ? `${Math.floor(map.total_length / 60)}:${String(map.total_length % 60).padStart(2, '0')}` : '?:??';
     const stat = (value, suffix = '') => Number.isFinite(Number(value)) ? `${value}${suffix}` : '?';
     const playedAt = Number.isNaN(played.getTime()) ? 'Unknown time' : `<t:${Math.floor(played.getTime() / 1000)}:f>`;
-    return reply(message, [
+    return respond([
       `**${title} +${modLabel}**`, `**${stars}**`, '',
       `▸ **${score.rank || '—'}** • **${score.pp == null ? '—' : `${Number(score.pp).toFixed(2)}pp`}** • ${accuracy}`,
       `▸ ${scoreValue} • x${score.max_combo ?? 0}/${map?.max_combo ?? '?'} • [${judgments}]`,
@@ -252,10 +245,10 @@ async function osuCommand(message, args) {
       '', `Try #1 • osu! Bancho • ${playedAt}`, `[Beatmap](${url})`,
     ].join('\n'));
   } catch (error) {
-    if (error.status === 404) return reply(message, `Could not find osu! user "${targetUsername || 'linked account'}".`);
-    if (error.message === 'OSU_NOT_CONFIGURED') return reply(message, 'The bot owner needs to configure the osu! API credentials.');
+    if (error.status === 404) return respond(`Could not find osu! user "${targetUsername || 'linked account'}".`);
+    if (error.message === 'OSU_NOT_CONFIGURED') return respond('The bot owner needs to configure the osu! API credentials.');
     logFailure('osu! command');
-    return reply(message, 'Could not load or save the osu! account right now. Please try again later.');
+    return respond('Could not load or save the osu! account right now. Please try again later.');
   }
 }
 
@@ -266,58 +259,46 @@ const fortunes = [
   'Average Luck', 'Outlook good', 'Godly Luck', 'Good news will come to you by mail',
   'pls stop. Im tired', 'play osu.', 'Can i not telling you??', '(≧∀≦)ゞ', 'Dont play osu.',
 ];
-async function publicCommand(message, command, args) {
-  if (command === 'help') return reply(message, [
-    'Commands:', `${prefix}help`, `${prefix}osu`, `${prefix}osu <username>`, `${prefix}osu add "username"`,
-    `${prefix}set countdown GMT+7`, `${prefix}set countdown cancel`,
-    `${prefix}rule @role`, `${prefix}rule cancel`, `${prefix}number`, `${prefix}number cancel`,
-    `${prefix}delink #chat`, `${prefix}delink cancel`, `${prefix}status`, `${prefix}fortune`,
-    '', 'Configuration commands require the Server Owner, Administrator, or Bot Owner.',
-    'Counting starts at 1; wrong numbers reset it. Non-numbers are ignored; consecutive turns are allowed.',
-    'Anti-link exempts owner/Admin, bots, and webhooks. Warnings use DMs with a brief channel fallback.',
-    'Countdown uses a fixed UTC offset (no automatic daylight saving changes).',
-    `${prefix}osu — View your latest osu!standard play.`,
-    `${prefix}osu <username> — View another player's latest osu!standard play.`,
-    `${prefix}osu add <username> — Link your osu! account.`,
-  ].join('\n'));
-  if (command === 'fortune') return reply(message, `**Your Fortune:**\n${fortunes[Math.floor(Math.random() * fortunes.length)]}`);
-  if (command === 'osu') return osuCommand(message, args);
-  if (command === 'status') {
-    const minutes = Math.floor(process.uptime() / 60);
-    return reply(message, [
-      'Bot Status', `Servers: ${client.guilds.cache.size}`,
-      `Users (approx.): ${client.guilds.cache.reduce((sum, guild) => sum + guild.memberCount, 0).toLocaleString('en-US')}`,
-      `Uptime: ${Math.floor(minutes / 1440)}d ${Math.floor(minutes / 60) % 24}h ${minutes % 60}m`,
-      `RAM: ${(process.memoryUsage().rss / 1024 / 1024).toFixed(1)} MB`,
-      `Ping: ${client.ws.ping < 0 ? 'Measuring...' : `${client.ws.ping}ms`}`,
-      `Node.js: ${process.version}`, `discord.js: ${version}`,
+async function handleInteraction(interaction) {
+  if (!interaction.isChatInputCommand() || !interaction.guild) return;
+  const command = interaction.commandName;
+  try {
+    if (mongoose.connection.readyState !== 1) return interactionReply(interaction, 'Database temporarily unavailable. Please try again shortly.', true);
+    if (['set', 'rule', 'number', 'delink'].includes(command)) return configureSlash(interaction, command);
+    if (command === 'osu-add') return osuCommand(interaction, `add "${interaction.options.getString('username')}"`);
+    if (command === 'osu') {
+      return osuCommand(interaction, interaction.options.getString('username') || '');
+    }
+    if (command === 'help') return interactionReply(interaction, [
+      'Slash commands:', '/help', '/osu', '/osu username:<username>', '/osu-add username:<username>',
+      '/set countdown timezone:<GMT+7>', '/set countdown cancel:true', '/rule role:@role', '/rule cancel:true',
+      '/number', '/number cancel:true', '/delink channel:#chat', '/delink cancel:true', '/status', '/fortune',
+      '', 'Configuration commands require the Server Owner, Administrator, or Bot Owner.',
+      'Counting starts at 1; wrong numbers reset it. Anti-link exempts owner/Admin, bots, and webhooks.',
     ].join('\n'));
-  }
+    if (command === 'fortune') return interactionReply(interaction, `**Your Fortune:**\n${fortunes[Math.floor(Math.random() * fortunes.length)]}`);
+    if (command === 'status') {
+      const minutes = Math.floor(process.uptime() / 60);
+      return interactionReply(interaction, ['Bot Status', `Servers: ${client.guilds.cache.size}`,
+        `Users (approx.): ${client.guilds.cache.reduce((sum, guild) => sum + guild.memberCount, 0).toLocaleString('en-US')}`,
+        `Uptime: ${Math.floor(minutes / 1440)}d ${Math.floor(minutes / 60) % 24}h ${minutes % 60}m`,
+        `RAM: ${(process.memoryUsage().rss / 1024 / 1024).toFixed(1)} MB`,
+        `Ping: ${client.ws.ping < 0 ? 'Measuring...' : `${client.ws.ping}ms`}`, `Node.js: ${process.version}`, `discord.js: ${version}`].join('\n'));
+    }
+  } catch { logFailure('Interaction handling'); if (!interaction.replied) await interactionReply(interaction, 'Something went wrong. Please try again shortly.', true); }
 }
 
 async function handleMessage(message) {
   if (!message.guild || message.author.bot || message.webhookId) return;
-  const match = message.content.startsWith(prefix)
-    ? /^(\S+)\s*([\s\S]*)$/.exec(message.content.slice(prefix.length).trim()) : null;
-  const command = match?.[1].toLowerCase();
-  const args = match?.[2].trim() || '';
-  const configCommand = ['set', 'rule', 'number', 'delink'].includes(command);
   try {
-    const blocked = await inGuildOrder(message.guild.id, async () => {
-      if (mongoose.connection.readyState !== 1) {
-        if (configCommand || command === 'osu') await reply(message, 'Database temporarily unavailable. Please try again shortly.');
-        return configCommand || command === 'osu';
-      }
+    await inGuildOrder(message.guild.id, async () => {
+      if (mongoose.connection.readyState !== 1) return;
       const settings = await Guild.findOne({ guildId: message.guild.id }).lean();
       if (await moderateLink(message, settings)) return true;
-      if (configCommand) { await configure(message, command, args); return true; }
-      if (!match) await countMessage(message, settings);
-      return false;
+      await countMessage(message, settings);
     });
-    if (!blocked && command) await publicCommand(message, command, args);
   } catch {
     logFailure('Message handling');
-    if (command) await reply(message, 'Something went wrong. Please try again shortly.');
   }
 }
 
@@ -345,7 +326,7 @@ async function checkCountdowns() {
           'countdown.lastSentDate': { $ne: today.date },
         }, { $set: { 'countdown.lastSentDate': today.date } });
         if (!claimed.modifiedCount) return;
-        await send(channel, today.newYear ? '🎉 Happy New Year!' : `🎉 ${today.days} ${today.days === 1 ? 'Day' : 'Days'} Until New Year!`);
+        await send(channel, today.newYear ? ' Happy New Year!' : ` ${today.days} ${today.days === 1 ? 'Day' : 'Days'} Until New Year!`);
       }).catch(() => { logFailure('Guild countdown'); });
     }
     const now = Date.now();
@@ -356,6 +337,7 @@ async function checkCountdowns() {
   finally { checkingCountdown = false; }
 }
 
+client.on('interactionCreate', interaction => { void handleInteraction(interaction); });
 client.on('messageCreate', message => { void handleMessage(message); });
 client.on('guildMemberAdd', member => {
   void inGuildOrder(member.guild.id, async () => {
@@ -374,7 +356,6 @@ mongoose.connection.on('disconnected', () => console.warn('MongoDB disconnected;
 
 async function start() {
   if (!process.env.DISCORD_TOKEN || !process.env.MONGODB_URI) throw new Error('Missing DISCORD_TOKEN or MONGODB_URI');
-  if (!prefix.trim() || /\s/.test(prefix) || prefix.startsWith('/') || prefix.length > 8) throw new Error('Invalid PREFIX');
   const type = ActivityType[Object.keys(ActivityType).find(key => key.toUpperCase() === (process.env.BOT_ACTIVITY_TYPE || 'LISTENING').toUpperCase())];
   if (typeof type !== 'number') throw new Error('Invalid BOT_ACTIVITY_TYPE');
   const status = process.env.BOT_STATUS || 'online';
@@ -414,4 +395,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { parseOffset, countdownDate, hasLink, inGuildOrder, countMessage, configure, isAdmin, canConfigureGuild, moderateLink, checkCountdowns, osuCommand, client };
+module.exports = { parseOffset, countdownDate, hasLink, inGuildOrder, countMessage, configure, configureSlash, isAdmin, canConfigureGuild, moderateLink, checkCountdowns, osuCommand, handleInteraction, client };

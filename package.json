@@ -1,12 +1,13 @@
 {
-  "name": "simple-prefix-discord-bot",
+  "name": "simple-discord-bot",
   "version": "1.0.0",
   "private": true,
-  "description": "A small Discord prefix bot with MongoDB persistence",
+  "description": "A small Discord bot with MongoDB persistence",
   "main": "index.js",
   "engines": { "node": ">=22.12.0" },
   "scripts": {
     "start": "node index.js",
+    "register": "node deploy-commands.js",
     "test": "node bot.test.js",
     "check": "node --check index.js && node --check osu.js && node --check models/User.js && node --check models/Guild.js"
   },

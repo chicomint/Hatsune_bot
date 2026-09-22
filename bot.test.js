@@ -323,3 +323,26 @@ test('osu reports invalid temporary usernames cleanly', async () => {
   await bot.osuCommand(msg, 'does-not-exist');
   assert.equal(msg.sent[0], 'Could not find osu! user "does-not-exist".');
 });
+
+test('slash interaction dispatches public commands and configuration permission checks', async () => {
+  const replies = [];
+  const oldReadyState = mongoose.connection.readyState;
+  mongoose.connection.readyState = 1;
+  const interaction = {
+    guild: { id: 'slash-guild', ownerId: 'guild-owner' },
+    member: { permissions: new PermissionsBitField() },
+    user: { id: 'normal-user' }, commandName: 'fortune', replied: false, deferred: false,
+    isChatInputCommand: () => true,
+    reply: async payload => { replies.push(payload); },
+    options: { getString: () => null, getBoolean: () => false },
+  };
+  await bot.handleInteraction(interaction);
+  assert.equal(replies.length, 1);
+  assert.equal(replies[0].ephemeral, false);
+
+  interaction.commandName = 'number';
+  await bot.handleInteraction(interaction);
+  assert.equal(replies.at(-1).ephemeral, true);
+  assert.match(replies.at(-1).content, /Only the server owner/);
+  mongoose.connection.readyState = oldReadyState;
+});
