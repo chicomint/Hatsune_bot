@@ -6,6 +6,8 @@ const { PermissionsBitField } = require('discord.js');
 const Guild = require('./models/Guild');
 const User = require('./models/User');
 const bot = require('./index');
+process.env.OSU_CLIENT_ID = process.env.OSU_CLIENT_ID || 'test-client-id';
+process.env.OSU_CLIENT_SECRET = process.env.OSU_CLIENT_SECRET || 'test-client-secret';
 afterEach(() => mock.restoreAll());
 
 test('fixed offsets validate syntax and real-world boundaries', () => {
@@ -246,4 +248,67 @@ test('osu! tokens are shared, renewed on 401, and failures are bounded', async (
     if (previousId === undefined) delete process.env.OSU_CLIENT_ID; else process.env.OSU_CLIENT_ID = previousId;
     if (previousSecret === undefined) delete process.env.OSU_CLIENT_SECRET; else process.env.OSU_CLIENT_SECRET = previousSecret;
   }
+});
+
+function osuMessage(id = `osu-${Math.random()}`) {
+  const sent = [];
+  return {
+    author: { id },
+    channel: { isTextBased: () => true, isThread: () => false,
+      permissionsFor: () => new PermissionsBitField(['ViewChannel', 'SendMessages']),
+      send: async content => { sent.push(content); return content; } },
+    sent,
+  };
+}
+
+function mockOsuApi({ username = 'peppy', id = 123, scores = [{}] } = {}) {
+  mock.method(global, 'fetch', async url => {
+    if (url.includes('/oauth/token')) return Response.json({ access_token: 'test-token', expires_in: 1 });
+    if (url.includes('/scores/recent')) return Response.json(scores);
+    if (url.includes('/users/')) return Response.json({ id, username });
+    throw new Error(`Unexpected URL: ${url}`);
+  });
+}
+
+test('osu without arguments uses the saved account', async () => {
+  mock.method(User, 'findOne', () => ({ lean: async () => ({ discordUserId: 'saved-user', osuUserId: '42' }) }));
+  mockOsuApi({ username: 'saved-player', id: 42, scores: [] });
+  const msg = osuMessage('saved-user');
+  await bot.osuCommand(msg, '');
+  assert.match(msg.sent[0], /No recent osu! Standard plays found for saved-player/);
+});
+
+test('osu username lookup does not modify the linked account', async () => {
+  mock.method(User, 'findOneAndUpdate', () => { throw new Error('temporary lookup must not save'); });
+  mockOsuApi({ username: 'peppy', id: 1, scores: [] });
+  const msg = osuMessage('temporary-user');
+  await bot.osuCommand(msg, 'peppy');
+  assert.match(msg.sent[0], /No recent osu! Standard plays found for peppy/);
+});
+
+test('osu add saves the account', async () => {
+  let update;
+  mock.method(User, 'findOneAndUpdate', async (...args) => { update = args; });
+  mockOsuApi({ username: 'peppy', id: 1, scores: [] });
+  const msg = osuMessage('link-user');
+  await bot.osuCommand(msg, 'add peppy');
+  assert.equal(update[0].discordUserId, 'link-user');
+  assert.deepEqual(update[1].$set, { osuUsername: 'peppy', osuUserId: '1' });
+});
+
+test('osu temporary lookup accepts quoted usernames with spaces', async () => {
+  mockOsuApi({ username: 'Player With Spaces', id: 7, scores: [] });
+  const msg = osuMessage('spaces-user');
+  await bot.osuCommand(msg, '"Player With Spaces"');
+  assert.match(msg.sent[0], /Player With Spaces/);
+});
+
+test('osu reports invalid temporary usernames cleanly', async () => {
+  mock.method(global, 'fetch', async url => {
+    if (url.includes('/oauth/token')) return Response.json({ access_token: 'test-token', expires_in: 1 });
+    return new Response(null, { status: 404 });
+  });
+  const msg = osuMessage('invalid-user');
+  await bot.osuCommand(msg, 'does-not-exist');
+  assert.equal(msg.sent[0], 'Could not find osu! user "does-not-exist".');
 });

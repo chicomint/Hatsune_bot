@@ -192,21 +192,31 @@ async function osuCommand(message, args) {
   if (onCooldown(osuCooldowns, message.author.id, seconds('OSU_COMMAND_COOLDOWN_SECONDS', 5))) {
     return reply(message, 'Please wait a few seconds before using osu! again.');
   }
+  let targetUsername;
+  let targetUserId;
   try {
-    if (args) {
+    if (/^add(?:\s|$)/i.test(args)) {
       const match = /^add\s+(?:"([^"\r\n]+)"|([^"\r\n]+))$/i.exec(args);
       const username = (match?.[1] || match?.[2] || '').trim();
       if (!username || username.length > 32) return reply(message, `Use ${prefix}osu add "username".`);
+      targetUsername = username;
       const user = await osuGet(`/users/${encodeURIComponent(username)}/osu?key=username`);
       await User.findOneAndUpdate({ discordUserId: message.author.id }, { $set: {
         osuUsername: user.username, osuUserId: String(user.id),
       } }, { upsert: true, runValidators: true });
       return reply(message, `Connected your osu! account: ${user.username}.`);
     }
-    const saved = await User.findOne({ discordUserId: message.author.id }).lean();
-    if (!saved) return reply(message, `You haven't connected your osu! account yet.\n\nUse:\n${prefix}osu add "username"`);
-    const user = await osuGet(`/users/${encodeURIComponent(saved.osuUserId)}/osu?key=id`);
-    const scores = await osuGet(`/users/${encodeURIComponent(saved.osuUserId)}/scores/recent?mode=osu&include_fails=1&limit=1`);
+    if (args) {
+      const match = /^(?:"([^"\r\n]+)"|([^"\r\n]+))$/.exec(args);
+      targetUsername = (match?.[1] || match?.[2] || '').trim();
+      if (!targetUsername || targetUsername.length > 32) return reply(message, `Use ${prefix}osu <username>.`);
+    } else {
+      const saved = await User.findOne({ discordUserId: message.author.id }).lean();
+      if (!saved) return reply(message, `You haven't connected your osu! account yet.\n\nUse:\n${prefix}osu add "username"`);
+      targetUserId = saved.osuUserId;
+    }
+    const user = await osuGet(`/users/${encodeURIComponent(targetUserId || targetUsername)}/osu?key=${targetUserId ? 'id' : 'username'}`);
+    const scores = await osuGet(`/users/${encodeURIComponent(user.id)}/scores/recent?mode=osu&include_fails=1&limit=1`);
     const score = scores[0];
     if (!score) return reply(message, `No recent osu! Standard plays found for ${user.username}.`);
     const map = score.beatmap;
@@ -214,7 +224,7 @@ async function osuCommand(message, args) {
     const mods = (score.mods || []).map(mod => typeof mod === 'string' ? mod : mod.acronym).join(', ') || 'None';
     const played = new Date(score.ended_at || score.created_at);
     const title = `${set?.artist || 'Unknown artist'} - ${set?.title || 'Unknown map'} [${map?.version || 'Unknown difficulty'}]`;
-    const url = map?.id ? `https://osu.ppy.sh/beatmaps/${map.id}` : `https://osu.ppy.sh/users/${saved.osuUserId}`;
+    const url = map?.id ? `https://osu.ppy.sh/beatmaps/${map.id}` : `https://osu.ppy.sh/users/${user.id}`;
     const stars = Number.isFinite(Number(map?.difficulty_rating)) ? `${Number(map.difficulty_rating).toFixed(2)}★` : '★ unavailable';
     const modLabel = mods === 'None' ? 'NM' : mods.replace(/, /g, '');
     const scoreValue = Number(score.total_score ?? score.score ?? 0).toLocaleString('en-US');
@@ -236,10 +246,10 @@ async function osuCommand(message, args) {
       '', `Try #1 • osu! Bancho • ${playedAt}`, `[Beatmap](${url})`,
     ].join('\n'));
   } catch (error) {
-    if (error.status === 404) return reply(message, "That osu! account wasn't found. Check the username or connect it again.");
+    if (error.status === 404) return reply(message, `Could not find osu! user "${targetUsername || 'linked account'}".`);
     if (error.message === 'OSU_NOT_CONFIGURED') return reply(message, 'The bot owner needs to configure the osu! API credentials.');
     logFailure('osu! command');
-    return reply(message, 'Could not load or save your osu! account right now. Please try again later.');
+    return reply(message, 'Could not load or save the osu! account right now. Please try again later.');
   }
 }
 
@@ -252,7 +262,7 @@ const fortunes = [
 ];
 async function publicCommand(message, command, args) {
   if (command === 'help') return reply(message, [
-    'Commands:', `${prefix}help`, `${prefix}osu`, `${prefix}osu add "username"`,
+    'Commands:', `${prefix}help`, `${prefix}osu`, `${prefix}osu <username>`, `${prefix}osu add "username"`,
     `${prefix}set countdown GMT+7`, `${prefix}set countdown cancel`,
     `${prefix}rule @role`, `${prefix}rule cancel`, `${prefix}number`, `${prefix}number cancel`,
     `${prefix}delink #chat`, `${prefix}delink cancel`, `${prefix}status`, `${prefix}fortune`,
@@ -260,7 +270,9 @@ async function publicCommand(message, command, args) {
     'Counting starts at 1; wrong numbers reset it. Non-numbers are ignored; consecutive turns are allowed.',
     'Anti-link exempts owner/Admin, bots, and webhooks. Warnings use DMs with a brief channel fallback.',
     'Countdown uses a fixed UTC offset (no automatic daylight saving changes).',
-    'osu! shows your latest Standard play, including failed plays.',
+    `${prefix}osu — View your latest osu!standard play.`,
+    `${prefix}osu <username> — View another player's latest osu!standard play.`,
+    `${prefix}osu add <username> — Link your osu! account.`,
   ].join('\n'));
   if (command === 'fortune') return reply(message, `**Your Fortune:**\n${fortunes[Math.floor(Math.random() * fortunes.length)]}`);
   if (command === 'osu') return osuCommand(message, args);
@@ -396,4 +408,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { parseOffset, countdownDate, hasLink, inGuildOrder, countMessage, configure, isAdmin, moderateLink, checkCountdowns, client };
+module.exports = { parseOffset, countdownDate, hasLink, inGuildOrder, countMessage, configure, isAdmin, moderateLink, checkCountdowns, osuCommand, client };
