@@ -334,7 +334,7 @@ test('slash interaction dispatches public commands and configuration permission 
     user: { id: 'normal-user' }, commandName: 'fortune', replied: false, deferred: false,
     isChatInputCommand: () => true,
     reply: async payload => { replies.push(payload); },
-    options: { getString: () => null, getBoolean: () => false },
+    options: { getString: () => null, getBoolean: () => false, getSubcommand: () => 'enable' },
   };
   await bot.handleInteraction(interaction);
   assert.equal(replies.length, 1);

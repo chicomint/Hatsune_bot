@@ -97,8 +97,9 @@ async function configureSlash(interaction, command) {
   if (!canConfigureGuild(interaction)) return interactionReply(interaction, 'Only the server owner, an Administrator, or the bot owner can configure this.', true);
   const guildId = interaction.guild.id;
   if (command === 'set') {
+    const action = interaction.options.getSubcommand();
     const timezone = interaction.options.getString('timezone');
-    const cancel = interaction.options.getBoolean('cancel');
+    const cancel = action === 'cancel';
     if (cancel) { await Guild.updateOne({ guildId }, { $unset: { countdown: 1 } }); return interactionReply(interaction, 'Countdown disabled for this server.', true); }
     const offset = parseOffset(timezone || '');
     if (offset === null) return interactionReply(interaction, 'Use GMT+7, UTC-5, or UTC+5:30 (UTC-12 to UTC+14).', true);
@@ -107,13 +108,13 @@ async function configureSlash(interaction, command) {
     return interactionReply(interaction, 'Daily New Year countdown enabled in this channel.', true);
   }
   if (command === 'number') {
-    if (interaction.options.getBoolean('cancel')) { await Guild.updateOne({ guildId }, { $unset: { counting: 1 } }); return interactionReply(interaction, 'Counting disabled for this server.', true); }
+    if (interaction.options.getSubcommand() === 'cancel') { await Guild.updateOne({ guildId }, { $unset: { counting: 1 } }); return interactionReply(interaction, 'Counting disabled for this server.', true); }
     if (!canSend(interaction.channel)) return interactionReply(interaction, 'I cannot send messages in this channel.', true);
     await saveGuild(guildId, { $set: { counting: { enabled: true, channelId: interaction.channelId, currentNumber: 0, lastUserId: null } } });
     return interactionReply(interaction, 'Counting enabled! Start at 1. Consecutive turns are allowed.', true);
   }
   if (command === 'rule') {
-    if (interaction.options.getBoolean('cancel')) { await Guild.updateOne({ guildId }, { $unset: { autoRoleId: 1 } }); return interactionReply(interaction, 'Auto-role disabled. Existing roles were not removed.', true); }
+    if (interaction.options.getSubcommand() === 'cancel') { await Guild.updateOne({ guildId }, { $unset: { autoRoleId: 1 } }); return interactionReply(interaction, 'Auto-role disabled. Existing roles were not removed.', true); }
     const role = await interaction.options.getRole('role');
     const me = await interaction.guild.members.fetchMe();
     if (!me.permissions.has(P.ManageRoles)) return interactionReply(interaction, 'I need Manage Roles permission.', true);
@@ -124,7 +125,7 @@ async function configureSlash(interaction, command) {
     return interactionReply(interaction, `Auto-role enabled: <@&${role.id}>.`, true);
   }
   if (command === 'delink') {
-    if (interaction.options.getBoolean('cancel')) { await Guild.updateOne({ guildId }, { $unset: { antiLinkChannelId: 1 } }); return interactionReply(interaction, 'Anti-link disabled for this server.', true); }
+    if (interaction.options.getSubcommand() === 'cancel') { await Guild.updateOne({ guildId }, { $unset: { antiLinkChannelId: 1 } }); return interactionReply(interaction, 'Anti-link disabled for this server.', true); }
     const channel = await interaction.options.getChannel('channel');
     if (!channel || channel.guildId !== guildId || !canSend(channel)) return interactionReply(interaction, 'Choose a text channel in this server where I can view and send messages.', true);
     if (!channel.permissionsFor(client.user)?.has(P.ManageMessages)) return interactionReply(interaction, 'I need Manage Messages permission in that channel.', true);
@@ -141,6 +142,7 @@ async function configure(message, command, args) {
   const interaction = { ...message, user: message.author, commandName: command, channelId: message.channel.id,
     isChatInputCommand: () => true, replied: false, deferred: false,
     options: { getString: name => options.get(name) || null, getBoolean: name => options.get(name) || false,
+      getSubcommand: () => command === 'set' ? (args === 'countdown cancel' ? 'cancel' : 'countdown') : (args === 'cancel' ? 'cancel' : command === 'number' ? 'enable' : 'set'),
       getRole: () => message.guild.roles?.fetch ? message.guild.roles.fetch((args.match(/\d+/) || [])[0]) : null,
       getChannel: () => message.guild.channels?.fetch ? message.guild.channels.fetch((args.match(/\d+/) || [])[0]) : null },
     reply: content => { message.sent?.push(content.content); return content; },
@@ -265,14 +267,15 @@ async function handleInteraction(interaction) {
   try {
     if (mongoose.connection.readyState !== 1) return interactionReply(interaction, 'Database temporarily unavailable. Please try again shortly.', true);
     if (['set', 'rule', 'number', 'delink'].includes(command)) return configureSlash(interaction, command);
-    if (command === 'osu-add') return osuCommand(interaction, `add "${interaction.options.getString('username')}"`);
     if (command === 'osu') {
+      const action = interaction.options.getSubcommand();
+      if (action === 'add') return osuCommand(interaction, `add "${interaction.options.getString('username')}"`);
       return osuCommand(interaction, interaction.options.getString('username') || '');
     }
     if (command === 'help') return interactionReply(interaction, [
-      'Slash commands:', '/help', '/osu', '/osu username:<username>', '/osu-add username:<username>',
-      '/set countdown timezone:<GMT+7>', '/set countdown cancel:true', '/rule role:@role', '/rule cancel:true',
-      '/number', '/number cancel:true', '/delink channel:#chat', '/delink cancel:true', '/status', '/fortune',
+      'Slash commands:', '/help', '/osu recent', '/osu recent username:<username>', '/osu add username:<username>',
+      '/set countdown timezone:<GMT+7>', '/set countdown cancel', '/rule set role:@role', '/rule cancel',
+      '/number enable', '/number cancel', '/delink set channel:#chat', '/delink cancel', '/status', '/fortune',
       '', 'Configuration commands require the Server Owner, Administrator, or Bot Owner.',
       'Counting starts at 1; wrong numbers reset it. Anti-link exempts owner/Admin, bots, and webhooks.',
     ].join('\n'));
