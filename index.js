@@ -1,6 +1,6 @@
 require('dotenv').config({ quiet: true });
 const mongoose = require('mongoose');
-const { Client, GatewayIntentBits, PermissionsBitField, ActivityType, EmbedBuilder, version } = require('discord.js');
+const { Client, GatewayIntentBits, PermissionsBitField, ActivityType, version } = require('discord.js');
 const User = require('./models/User');
 const Guild = require('./models/Guild');
 const { osuGet } = require('./osu');
@@ -213,25 +213,28 @@ async function osuCommand(message, args) {
     const set = score.beatmapset;
     const mods = (score.mods || []).map(mod => typeof mod === 'string' ? mod : mod.acronym).join(', ') || 'None';
     const played = new Date(score.ended_at || score.created_at);
-    const fields = [
-      ['Score', Number(score.total_score ?? score.score ?? 0).toLocaleString('en-US')],
-      ['Accuracy', `${(score.accuracy * 100).toFixed(2)}%`],
-      ['Combo', `${score.max_combo}x`],
-      ['Misses', String(score.statistics?.miss ?? score.statistics?.count_miss ?? 0)],
-      ['PP', score.pp == null ? 'Unavailable' : `${Number(score.pp).toFixed(2)}pp`],
-      ['Mods', mods], ['Grade', score.rank || 'Unknown'],
-    ];
-    if (!Number.isNaN(played.getTime())) fields.push(['Played', `<t:${Math.floor(played.getTime() / 1000)}:R>`]);
-    const title = `Recent osu! Standard Play for ${user.username}`;
-    const description = `${set?.artist || 'Unknown artist'} - ${set?.title || 'Unknown map'} [${map?.version || 'Unknown difficulty'}]`;
+    const title = `${set?.artist || 'Unknown artist'} - ${set?.title || 'Unknown map'} [${map?.version || 'Unknown difficulty'}]`;
     const url = map?.id ? `https://osu.ppy.sh/beatmaps/${map.id}` : `https://osu.ppy.sh/users/${saved.osuUserId}`;
-    if (!message.channel.permissionsFor(client.user)?.has(P.EmbedLinks)) {
-      return reply(message, `${title}\nMap: ${description}\n${fields.map(([name, value]) => `${name}: ${value}`).join('\n')}\n${url}`);
-    }
-    const embed = new EmbedBuilder().setColor(0xff66aa).setTitle(title.slice(0, 256))
-      .setDescription(description.slice(0, 4096)).setURL(url)
-      .addFields(fields.map(([name, value]) => ({ name, value: value.slice(0, 1024), inline: true })));
-    return send(message.channel, { embeds: [embed] });
+    const stars = Number.isFinite(Number(map?.difficulty_rating)) ? `${Number(map.difficulty_rating).toFixed(2)}★` : '★ unavailable';
+    const modLabel = mods === 'None' ? 'NM' : mods.replace(/, /g, '');
+    const scoreValue = Number(score.total_score ?? score.score ?? 0).toLocaleString('en-US');
+    const accuracy = `${(score.accuracy * 100).toFixed(2)}%`;
+    const misses = score.statistics?.miss ?? score.statistics?.count_miss ?? 0;
+    const judgments = [score.statistics?.count_300 ?? score.statistics?.great ?? 0,
+      score.statistics?.count_100 ?? score.statistics?.ok ?? 0,
+      score.statistics?.count_50 ?? score.statistics?.meh ?? 0, misses].join('/');
+    const length = Number.isFinite(Number(map?.total_length))
+      ? `${Math.floor(map.total_length / 60)}:${String(map.total_length % 60).padStart(2, '0')}` : '?:??';
+    const stat = (value, suffix = '') => Number.isFinite(Number(value)) ? `${value}${suffix}` : '?';
+    const playedAt = Number.isNaN(played.getTime()) ? 'Unknown time' : `<t:${Math.floor(played.getTime() / 1000)}:f>`;
+    return reply(message, [
+      `**${title} +${modLabel}**`, `**${stars}**`, '',
+      `▸ **${score.rank || '—'}** • **${score.pp == null ? '—' : `${Number(score.pp).toFixed(2)}pp`}** • ${accuracy}`,
+      `▸ ${scoreValue} • x${score.max_combo ?? 0}/${map?.max_combo ?? '?'} • [${judgments}]`,
+      `▸ ${score.perfect || score.perfect_combo || misses === 0 ? 'FC' : `${misses} miss`}`,
+      `▸ ${length} • ${stat(map?.ar, ' AR')} ${stat(map?.od, ' OD')} ${stat(map?.hp, ' HP')} ${stat(map?.cs, ' CS')}`,
+      '', `Try #1 • osu! Bancho • ${playedAt}`, `[Beatmap](${url})`,
+    ].join('\n'));
   } catch (error) {
     if (error.status === 404) return reply(message, "That osu! account wasn't found. Check the username or connect it again.");
     if (error.message === 'OSU_NOT_CONFIGURED') return reply(message, 'The bot owner needs to configure the osu! API credentials.');
@@ -247,23 +250,19 @@ const fortunes = [
   'Average Luck', 'Outlook good', 'Godly Luck', 'Good news will come to you by mail',
   'pls stop. Im tired', 'play osu.', 'Can i not telling you??', '(≧∀≦)ゞ', 'Dont play osu.',
 ];
-function svgCommand(message) {
-  return reply(message, 'SVG means Scalable Vector Graphics: an image format that stays sharp at any size.');
-}
 async function publicCommand(message, command, args) {
   if (command === 'help') return reply(message, [
     'Commands:', `${prefix}help`, `${prefix}osu`, `${prefix}osu add "username"`,
     `${prefix}set countdown GMT+7`, `${prefix}set countdown cancel`,
     `${prefix}rule @role`, `${prefix}rule cancel`, `${prefix}number`, `${prefix}number cancel`,
-    `${prefix}delink #chat`, `${prefix}delink cancel`, `${prefix}status`, `${prefix}fortune`, `${prefix}svg`,
+    `${prefix}delink #chat`, `${prefix}delink cancel`, `${prefix}status`, `${prefix}fortune`,
     '', 'Setup/cancel commands require the server owner or Administrator.',
     'Counting starts at 1; wrong numbers reset it. Non-numbers are ignored; consecutive turns are allowed.',
     'Anti-link exempts owner/Admin, bots, and webhooks. Warnings use DMs with a brief channel fallback.',
     'Countdown uses a fixed UTC offset (no automatic daylight saving changes).',
-    'osu! shows your latest Standard play, including failed plays. SVG is informational.',
+    'osu! shows your latest Standard play, including failed plays.',
   ].join('\n'));
   if (command === 'fortune') return reply(message, `**Your Fortune:**\n${fortunes[Math.floor(Math.random() * fortunes.length)]}`);
-  if (command === 'svg') return svgCommand(message);
   if (command === 'osu') return osuCommand(message, args);
   if (command === 'status') {
     const minutes = Math.floor(process.uptime() / 60);
