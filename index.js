@@ -30,6 +30,12 @@ function logFailure(context) { console.error(`${context} failed. Check connectiv
 function isAdmin(message) {
   return message.author.id === message.guild.ownerId || message.member?.permissions.has(P.Administrator);
 }
+function canConfigureGuild(message) {
+  if (!message.guild || !message.member) return false;
+  return message.author.id === process.env.OWNER_ID
+    || message.guild.ownerId === message.author.id
+    || message.member.permissions.has(P.Administrator);
+}
 function canSend(channel) {
   if (!channel?.isTextBased() || typeof channel.send !== 'function') return false;
   const permissions = channel.permissionsFor(client.user);
@@ -82,7 +88,7 @@ async function saveGuild(guildId, changes) {
 }
 
 async function configure(message, command, args) {
-  if (!isAdmin(message)) return reply(message, 'Only the server owner or an Administrator can configure this.');
+  if (!canConfigureGuild(message)) return reply(message, 'Only the server owner, an Administrator, or the bot owner can configure this.');
   const guildId = message.guild.id;
   const cancel = args.toLowerCase() === 'cancel';
   if (command === 'set') {
@@ -266,7 +272,7 @@ async function publicCommand(message, command, args) {
     `${prefix}set countdown GMT+7`, `${prefix}set countdown cancel`,
     `${prefix}rule @role`, `${prefix}rule cancel`, `${prefix}number`, `${prefix}number cancel`,
     `${prefix}delink #chat`, `${prefix}delink cancel`, `${prefix}status`, `${prefix}fortune`,
-    '', 'Setup/cancel commands require the server owner or Administrator.',
+    '', 'Configuration commands require the Server Owner, Administrator, or Bot Owner.',
     'Counting starts at 1; wrong numbers reset it. Non-numbers are ignored; consecutive turns are allowed.',
     'Anti-link exempts owner/Admin, bots, and webhooks. Warnings use DMs with a brief channel fallback.',
     'Countdown uses a fixed UTC offset (no automatic daylight saving changes).',
@@ -408,4 +414,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { parseOffset, countdownDate, hasLink, inGuildOrder, countMessage, configure, isAdmin, moderateLink, checkCountdowns, osuCommand, client };
+module.exports = { parseOffset, countdownDate, hasLink, inGuildOrder, countMessage, configure, isAdmin, canConfigureGuild, moderateLink, checkCountdowns, osuCommand, client };

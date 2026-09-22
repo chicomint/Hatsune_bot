@@ -104,7 +104,7 @@ test('non-admin configuration is rejected without database writes', async () => 
   for (const command of ['set', 'rule', 'number', 'delink']) {
     const msg = message();
     await bot.configure(msg, command, 'cancel');
-    assert.match(msg.sent[0], /Only the server owner/);
+    assert.match(msg.sent[0], /server owner.*Administrator.*bot owner/i);
   }
 });
 
@@ -188,6 +188,17 @@ test('Administrator permission and owner checks use current guild', () => {
   assert.equal(Boolean(bot.isAdmin(message())), false);
   assert.equal(bot.isAdmin(message({ author: { id: 'owner' } })), true);
   assert.equal(bot.isAdmin(message({ member: { permissions: new PermissionsBitField(['Administrator']) } })), true);
+});
+
+test('bot owner can configure without Administrator, and missing OWNER_ID preserves normal permissions', () => {
+  const previousOwnerId = process.env.OWNER_ID;
+  process.env.OWNER_ID = 'bot-owner';
+  assert.equal(bot.canConfigureGuild(message({ author: { id: 'bot-owner' } })), true);
+  assert.equal(bot.canConfigureGuild(message({ author: { id: 'ordinary' } })), false);
+  delete process.env.OWNER_ID;
+  assert.equal(bot.canConfigureGuild(message({ author: { id: 'owner' } })), true);
+  assert.equal(bot.canConfigureGuild(message({ member: { permissions: new PermissionsBitField(['Administrator']) } })), true);
+  if (previousOwnerId === undefined) delete process.env.OWNER_ID; else process.env.OWNER_ID = previousOwnerId;
 });
 
 test('countdown persists claim before delivery and does not repost after another check', async () => {
