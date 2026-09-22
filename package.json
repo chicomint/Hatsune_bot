@@ -1,5 +1,5 @@
 {
-  "name": "simple-discord-bot",
+  "name": "hatsune-bot",
   "version": "1.0.0",
   "private": true,
   "description": "A small Discord bot with MongoDB persistence",

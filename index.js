@@ -373,7 +373,7 @@ async function start() {
   await Promise.all([User.init(), Guild.init()]);
   console.log('MongoDB connected.');
   client.once('clientReady', () => {
-    client.user.setPresence({ activities: [{ name: process.env.BOT_ACTIVITY_NAME || 'LOLE', type, ...(url && { url }) }], status });
+    client.user.setPresence({ activities: [{ name: process.env.BOT_ACTIVITY_NAME || 'Hatsune bot', type, ...(url && { url }) }], status });
     scheduler = setInterval(() => { void checkCountdowns(); }, interval);
     void checkCountdowns();
     console.log(`Logged in as ${client.user.tag}\nServing ${client.guilds.cache.size} guilds.`);

@@ -6,7 +6,7 @@ if (!process.env.DISCORD_TOKEN || !process.env.DISCORD_CLIENT_ID) {
 }
 
 const commands = [
-  new SlashCommandBuilder().setName('help').setDescription("Show Kai's commands"),
+  new SlashCommandBuilder().setName('help').setDescription("Show Hatsune bot's commands"),
   new SlashCommandBuilder().setName('osu').setDescription('View recent osu!standard plays')
     .addSubcommand(sub => sub.setName('recent').setDescription('View a recent play').addStringOption(option => option.setName('username').setDescription('Optional osu! username')))
     .addSubcommand(sub => sub.setName('add').setDescription('Link your osu! account').addStringOption(option => option.setName('username').setDescription('osu! username').setRequired(true))),
@@ -23,7 +23,7 @@ const commands = [
   new SlashCommandBuilder().setName('delink').setDescription('Configure anti-link protection')
     .addSubcommand(sub => sub.setName('set').setDescription('Enable anti-link').addChannelOption(option => option.setName('channel').setDescription('Channel where links are blocked').addChannelTypes(ChannelType.GuildText).setRequired(true)))
     .addSubcommand(sub => sub.setName('cancel').setDescription('Disable anti-link')),
-  new SlashCommandBuilder().setName('status').setDescription("Show Kai's status"),
+  new SlashCommandBuilder().setName('status').setDescription("Show Hatsune bot's status"),
   new SlashCommandBuilder().setName('fortune').setDescription('Check your fortune'),
 ].map(command => command.setDMPermission(false).toJSON());
 
