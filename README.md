@@ -1,11 +1,11 @@
-<h1>kai-pa!</h1>
-<img src="https://i.imgur.com/da2aBFC.png">
-<br>
-<h2>set up</h2>
-<p>Don't forget to confix `index.js` and `config.json`</p>
-##need node .js 16+
-Install all dependencies 
-```
-npm install
-```
-Start the bot
+<h1>Hatsune bot!</h1>
+<img src="mimi.png" alt="Hatsune Bot">
+<p>
+A small Discord bot I originally made for my own server and my friends.
+Now anyone can use it too.
+</p>
+
+<a href="https://discord.com/discovery/applications/1098589465053765632">
+Discord discovery more....
+</a>
+
