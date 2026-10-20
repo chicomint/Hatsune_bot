@@ -16,4 +16,12 @@ module.exports = mongoose.model('Guild', new mongoose.Schema({
     lastUserId: { type: String, default: null },
   },
   antiLinkChannelId: String,
+  chikochan: {
+    enabled: { type: Boolean, default: false },
+    channelId: String,
+    source: String,
+    generation: String,
+    cursor: { type: Number, default: 0 },
+    seedReplyId: mongoose.Schema.Types.ObjectId,
+  },
 }, { versionKey: false }));

@@ -4,6 +4,9 @@ const { Client, GatewayIntentBits, PermissionsBitField, ActivityType, version } 
 const User = require('./models/User');
 const Guild = require('./models/Guild');
 const { osuGet } = require('./osu');
+const ChikoChanModels = require('./models/ChikoChan');
+const { ChikoChanFeed } = require('./chikochan/feed');
+const { handleChikoChan } = require('./chikochan/command');
 
 mongoose.set('bufferCommands', false);
 const P = PermissionsBitField.Flags;
@@ -17,6 +20,7 @@ const warningCooldowns = new Map();
 const osuCooldowns = new Map();
 let scheduler;
 let checkingCountdown = false;
+let chikochanFeed;
 
 function seconds(name, fallback) {
   const value = Number(process.env[name] || fallback);
@@ -26,6 +30,16 @@ function seconds(name, fallback) {
 
 // Never log raw errors: database and HTTP errors can contain credentials.
 function logFailure(context) { console.error(`${context} failed. Check connectivity and permissions.`); }
+function getChikoChanFeed() {
+  if (!chikochanFeed) chikochanFeed = new ChikoChanFeed({
+    client, inGuildOrder, logFailure,
+    url: process.env.CHIKOCHAN_BASE_URL || 'https://boards.chiko.cc',
+    pollMs: seconds('CHIKOCHAN_POLL_SECONDS', 30),
+    reconcileMs: seconds('CHIKOCHAN_RECONCILE_SECONDS', 600),
+    ready: () => mongoose.connection.readyState === 1 && client.isReady(),
+  });
+  return chikochanFeed;
+}
 function isAdmin(message) {
   return message.author.id === message.guild.ownerId || message.member?.permissions.has(P.Administrator);
 }
@@ -266,6 +280,7 @@ async function handleInteraction(interaction) {
   const command = interaction.commandName;
   try {
     if (mongoose.connection.readyState !== 1) return interactionReply(interaction, 'Database temporarily unavailable. Please try again shortly.', true);
+    if (command === 'chikochan') return await handleChikoChan(interaction, getChikoChanFeed());
     if (['set', 'rule', 'number', 'delink'].includes(command)) return configureSlash(interaction, command);
     if (command === 'osu') {
       const action = interaction.options.getSubcommand();
@@ -276,7 +291,9 @@ async function handleInteraction(interaction) {
       'Slash commands:', '/help', '/osu recent', '/osu recent username:<username>', '/osu add username:<username>',
       '/set countdown timezone:<GMT+7>', '/set countdown cancel', '/rule set role:@role', '/rule cancel',
       '/number enable', '/number cancel', '/delink set channel:#chat', '/delink cancel', '/status', '/fortune',
+      '/chikochan enable channel:#chat', '/chikochan disable', '/chikochan status',
       '', 'Configuration commands require the Server Owner, Administrator, or Bot Owner.',
+      'ChikoChan changes require Manage Server or Administrator; the feed is disabled by default.',
       'Counting starts at 1; wrong numbers reset it. Anti-link exempts owner/Admin, bots, and webhooks.',
     ].join('\n'));
     if (command === 'fortune') return interactionReply(interaction, `**Your Fortune:**\n${fortunes[Math.floor(Math.random() * fortunes.length)]}`);
@@ -369,13 +386,15 @@ async function start() {
   seconds('LINK_WARNING_COOLDOWN_SECONDS', 30);
   seconds('LINK_WARNING_DELETE_SECONDS', 5);
   seconds('OSU_COMMAND_COOLDOWN_SECONDS', 5);
+  const feed = getChikoChanFeed();
   await mongoose.connect(process.env.MONGODB_URI, { serverSelectionTimeoutMS: 5000, socketTimeoutMS: 15000 });
-  await Promise.all([User.init(), Guild.init()]);
+  await Promise.all([User.init(), Guild.init(), ...Object.values(ChikoChanModels).map(model => model.init())]);
   console.log('MongoDB connected.');
   client.once('clientReady', () => {
     client.user.setPresence({ activities: [{ name: process.env.BOT_ACTIVITY_NAME || 'Hatsune bot', type, ...(url && { url }) }], status });
     scheduler = setInterval(() => { void checkCountdowns(); }, interval);
     void checkCountdowns();
+    feed.start();
     console.log(`Logged in as ${client.user.tag}\nServing ${client.guilds.cache.size} guilds.`);
   });
   await client.login(process.env.DISCORD_TOKEN);
@@ -383,8 +402,9 @@ async function start() {
 
 async function shutdown() {
   clearInterval(scheduler);
-  client.destroy();
+  await chikochanFeed?.stop();
   await Promise.allSettled([...queues.values()]);
+  client.destroy();
   await mongoose.disconnect();
 }
 if (require.main === module) {
