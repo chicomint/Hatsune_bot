@@ -1,6 +1,5 @@
 require('dotenv').config({ quiet: true });
 const { REST, Routes, SlashCommandBuilder, ChannelType } = require('discord.js');
-const { buildCommand: chikochanCommand } = require('./chikochan/command');
 
 if (!process.env.DISCORD_TOKEN || !process.env.DISCORD_CLIENT_ID) {
   throw new Error('DISCORD_TOKEN and DISCORD_CLIENT_ID are required to register commands.');
@@ -26,7 +25,6 @@ const commands = [
     .addSubcommand(sub => sub.setName('cancel').setDescription('Disable anti-link')),
   new SlashCommandBuilder().setName('status').setDescription("Show Hatsune bot's status"),
   new SlashCommandBuilder().setName('fortune').setDescription('Check your fortune'),
-  chikochanCommand(),
 ].map(command => command.setDMPermission(false).toJSON());
 
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
