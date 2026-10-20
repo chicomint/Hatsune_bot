@@ -8,7 +8,6 @@ const sourceSchema = new Schema({
   _id: String,
   boards: [String],
   sequence: { type: Number, default: 0 },
-  lastSuccessfulCheck: Date,
   retryAt: Date,
 }, options);
 

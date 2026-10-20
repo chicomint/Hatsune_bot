@@ -291,7 +291,7 @@ async function handleInteraction(interaction) {
       'Slash commands:', '/help', '/osu recent', '/osu recent username:<username>', '/osu add username:<username>',
       '/set countdown timezone:<GMT+7>', '/set countdown cancel', '/rule set role:@role', '/rule cancel',
       '/number enable', '/number cancel', '/delink set channel:#chat', '/delink cancel', '/status', '/fortune',
-      '/chikochan enable channel:#chat', '/chikochan disable', '/chikochan status',
+      '/chikochan enable channel:#chat', '/chikochan disable',
       '', 'Configuration commands require the Server Owner, Administrator, or Bot Owner.',
       'ChikoChan changes require Manage Server or Administrator; the feed is disabled by default.',
       'Counting starts at 1; wrong numbers reset it. Anti-link exempts owner/Admin, bots, and webhooks.',

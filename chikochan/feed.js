@@ -127,7 +127,7 @@ class ChikoChanFeed {
       }
     }
     if (complete) {
-      await Source.updateOne({ _id: this.source }, { $set: { lastSuccessfulCheck: new Date(this.now()) }, $unset: { retryAt: 1 } });
+      await Source.updateOne({ _id: this.source }, { $unset: { retryAt: 1 } });
     } else {
       this.logFailure('ChikoChan source check');
       await this.saveRetry();

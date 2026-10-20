@@ -82,7 +82,6 @@ function interaction(guildId, action, selected, permissions = ['ManageGuild']) {
     reply: async payload => responses.push({ method: 'reply', ...payload }),
     deferReply: async payload => responses.push({ method: 'defer', ...payload }),
     editReply: async payload => responses.push({ method: 'edit', ...payload }),
-    followUp: async payload => responses.push({ method: 'followUp', ...payload }),
   };
 }
 
@@ -159,7 +158,7 @@ test('slash command uses the native text channel picker and guild contexts', () 
   const command = buildCommand().toJSON();
   assert.deepEqual(command.contexts, [0]);
   assert.deepEqual(command.integration_types, [0]);
-  assert.deepEqual(command.options.map(option => option.name), ['enable', 'disable', 'status']);
+  assert.deepEqual(command.options.map(option => option.name), ['enable', 'disable']);
   const option = command.options[0].options[0];
   assert.equal(option.type, 7);
   assert.equal(option.required, true);
@@ -464,11 +463,10 @@ test('a lost database acknowledgement retries with the same nonce and records su
   assert.equal(await Delivery.countDocuments({ sent: true }), 1);
 });
 
-test('source failures preserve last successful check and do not prevent pending-send retries', async () => {
+test('source failures do not prevent pending-send retries', async () => {
   thread('g', 1, [post(2, 1)]);
   const destination = channel('A'); const service = feed();
   await service.enable('A', destination.id);
-  const successful = (await Source.findById(origin).lean()).lastSuccessfulCheck.getTime();
   const send = destination.send.bind(destination);
   let fail = true;
   destination.send = async payload => { if (fail) { fail = false; throw new Error('temporary failure'); } return send(payload); };
@@ -476,7 +474,6 @@ test('source failures preserve last successful check and do not prevent pending-
   fixture.errors.set('/boards.json', { status: 503 }); clock += 30000;
   await service.tick();
   assert.equal(destination.messages.length, 1);
-  assert.equal((await Source.findById(origin).lean()).lastSuccessfulCheck.getTime(), successful);
 });
 
 test('incomplete baselines do not enable a subscription; source Retry-After survives a fresh feed instance', async () => {
@@ -512,38 +509,6 @@ test('full rereads refresh text and spoiler metadata without replaying an existi
   assert.equal(second.messages[0].embeds[0].image, undefined);
   assert.ok(second.messages[0].embeds[0].description.includes('Edited comment'));
   await service.tick(); assert.equal(first.messages.length, 1);
-});
-
-test('status is private, available without configuration permission, and lists boards and the saved destination', async () => {
-  thread('newboard', 1); const destination = channel('A'); const service = feed();
-  await service.enable('A', destination.id);
-  const request = interaction('A', 'status', null, []);
-  await handleChikoChan(request, service);
-  assert.equal(request.responses[0].flags, MessageFlags.Ephemeral);
-  const content = request.responses.at(-1).content;
-  for (const text of ['enabled', '<#destination>', '/g/', '/chiko/', '/newboard/', 'Last successful check: <t:']) {
-    assert.ok(content.includes(text), text);
-  }
-  await service.disable('A');
-  const disabled = interaction('A', 'status', null, []);
-  await handleChikoChan(disabled, service);
-  assert.match(disabled.responses.at(-1).content, /disabled/);
-});
-
-test('status includes all boards across private messages when they exceed the content limit', async () => {
-  const destination = channel('A'); const service = feed();
-  const boards = Array.from({ length: 250 }, (_, index) => `new_board_${index}`);
-  await Source.create({ _id: origin, boards });
-  const request = interaction('A', 'status', destination, []);
-  await handleChikoChan(request, service);
-  const responses = request.responses.filter(response => response.content);
-  assert.ok(responses.length > 1);
-  const text = responses.map(response => response.content).join('\n');
-  for (const board of boards) assert.ok(text.includes(`/${board}/`), board);
-  for (const response of responses) {
-    assert.ok(response.content.length <= 2000);
-    if (response.method === 'followUp') assert.equal(response.flags, MessageFlags.Ephemeral);
-  }
 });
 
 test('HTML conversion decodes entities, preserves breaks and quote references, and escapes Discord formatting', () => {

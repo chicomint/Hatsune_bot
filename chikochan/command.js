@@ -2,8 +2,6 @@
 
 const { SlashCommandBuilder, ChannelType, PermissionsBitField, MessageFlags,
   InteractionContextType, ApplicationIntegrationType } = require('discord.js');
-const Guild = require('../models/Guild');
-const { Source } = require('../models/ChikoChan');
 const { canUseChannel } = require('./feed');
 
 function buildCommand() {
@@ -12,8 +10,7 @@ function buildCommand() {
     .addSubcommand(sub => sub.setName('enable').setDescription('Enable replies or change the destination (Manage Server required)')
       .addChannelOption(option => option.setName('channel').setDescription('Destination for new replies')
         .addChannelTypes(ChannelType.GuildText).setRequired(true)))
-    .addSubcommand(sub => sub.setName('disable').setDescription('Disable replies (Manage Server required)'))
-    .addSubcommand(sub => sub.setName('status').setDescription('Show the destination, monitored boards, and last successful check'));
+    .addSubcommand(sub => sub.setName('disable').setDescription('Disable replies (Manage Server required)'));
 }
 
 async function handleChikoChan(interaction, feed) {
@@ -22,38 +19,13 @@ async function handleChikoChan(interaction, feed) {
   if (!interaction.guild) return privateReply('Use this command in a server.');
   const action = interaction.options.getSubcommand();
   const permissions = new PermissionsBitField(interaction.memberPermissions ?? interaction.member?.permissions ?? 0n);
-  if (action !== 'status' && !permissions.has(PermissionsBitField.Flags.ManageGuild)) {
+  if (!permissions.has(PermissionsBitField.Flags.ManageGuild)) {
     return privateReply('You need Manage Server or Administrator permission to change the ChikoChan feed.');
   }
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   const respond = content => interaction.editReply({ content, allowedMentions: { parse: [], repliedUser: false } });
   try {
     const guildId = interaction.guild.id;
-    if (action === 'status') {
-      const saved = await Guild.findOne({ guildId }).lean();
-      const subscription = saved?.chikochan;
-      const state = await Source.findById(feed.source).lean();
-      const enabled = subscription?.enabled && subscription.source === feed.source;
-      const chunks = [];
-      let chunk = '';
-      for (const board of state?.boards || []) {
-        const label = `/${board}/`;
-        if (chunk.length + label.length + 2 > 1400) { chunks.push(chunk); chunk = ''; }
-        chunk += `${chunk ? ', ' : ''}${label}`;
-      }
-      if (chunk) chunks.push(chunk);
-      await respond([
-        `ChikoChan reply feed: ${enabled ? 'enabled' : 'disabled'}`,
-        `Destination: ${subscription?.channelId ? `<#${subscription.channelId}>` : 'not configured'}`,
-        `Monitored boards: ${chunks.shift() || 'not discovered yet (discovered automatically when enabled)'}`,
-        `Last successful check: ${state?.lastSuccessfulCheck ? `<t:${Math.floor(state.lastSuccessfulCheck.getTime() / 1000)}:F>` : 'never'}`,
-      ].join('\n'));
-      for (const boards of chunks) {
-        await interaction.followUp({ content: `Monitored boards (continued): ${boards}`, flags: MessageFlags.Ephemeral,
-          allowedMentions: { parse: [], repliedUser: false } });
-      }
-      return;
-    }
     if (action === 'disable') {
       await feed.disable(guildId);
       return respond('ChikoChan reply feed disabled for this server.');
