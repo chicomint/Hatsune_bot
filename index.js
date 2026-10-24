@@ -4,6 +4,7 @@ const { Client, GatewayIntentBits, PermissionsBitField, ActivityType, version } 
 const User = require('./models/User');
 const Guild = require('./models/Guild');
 const { osuGet } = require('./osu');
+const { FinderInputError, USAGE: OSUM_USAGE, parsePrefix, fromSlash, findBeatmap, beatmapEmbed } = require('./beatmap-finder');
 
 mongoose.set('bufferCommands', false);
 const P = PermissionsBitField.Flags;
@@ -15,6 +16,7 @@ const client = new Client({
 const queues = new Map();
 const warningCooldowns = new Map();
 const osuCooldowns = new Map();
+const osumCooldowns = new Map();
 let scheduler;
 let checkingCountdown = false;
 
@@ -50,7 +52,8 @@ async function send(channel, payload) {
 function reply(message, content) { return send(message.channel, content); }
 async function interactionReply(interaction, content, ephemeral = false) {
   try {
-    if (interaction.replied || interaction.deferred) return interaction.followUp({ content, ephemeral });
+    if (interaction.deferred && !interaction.replied) return interaction.editReply({ content });
+    if (interaction.replied) return interaction.followUp({ content, ephemeral });
     return interaction.reply({ content, ephemeral });
   } catch { logFailure('Sending interaction reply'); return null; }
 }
@@ -212,7 +215,7 @@ async function osuCommand(message, args) {
       targetUsername = (match?.[1] || match?.[2] || '').trim();
       if (!targetUsername || targetUsername.length > 32) return respond('Use /osu with a username.');
     } else {
-      const saved = await User.findOne({ discordUserId: message.author.id }).lean();
+      const saved = await User.findOne({ discordUserId: actor.id }).lean();
       if (!saved) return respond("You haven't connected your osu! account yet.\n\nUse:\n/osu add username");
       targetUserId = saved.osuUserId;
     }
@@ -254,6 +257,37 @@ async function osuCommand(message, args) {
   }
 }
 
+async function osumCommand(source, input) {
+  const slash = Boolean(source.isChatInputCommand?.());
+  const respond = payload => {
+    if (!slash) return reply(source, payload);
+    if (source.deferred || source.replied) return source.editReply(payload);
+    return source.reply(payload);
+  };
+  try {
+    const options = slash ? fromSlash(input) : parsePrefix(input);
+    if (!options.name && !options.random) return respond({ content: OSUM_USAGE });
+    const actor = source.author || source.user;
+    if (onCooldown(osumCooldowns, actor.id, seconds('OSU_COMMAND_COOLDOWN_SECONDS', 5))) {
+      return respond({ content: 'Please wait a few seconds before using the beatmap finder again.' });
+    }
+    if (slash) await source.deferReply();
+    const result = await findBeatmap(options);
+    if (result.found === false) return respond({ content: result.exhaustive
+      ? 'No eligible beatmaps match those filters. Try another name or widen the time/star range.'
+      : 'No eligible beatmap found in this search sample. Try again, or use a more specific name or different filters.' });
+    return respond({ embeds: [beatmapEmbed(result)] });
+  } catch (error) {
+    let content = 'Could not load beatmaps right now. Please try again later.';
+    if (error instanceof FinderInputError) content = error.message;
+    else if (error.message === 'OSU_NOT_CONFIGURED') content = 'The bot owner needs to configure the osu! API credentials.';
+    else if (error.status === 429) content = `osu! is rate limiting requests. Please try again in ${error.retryAfter || 60} seconds.`;
+    else if (error.status === 404) content = 'That beatmap is no longer available. Please try again.';
+    else logFailure('Beatmap finder');
+    return respond({ content });
+  }
+}
+
 const fortunes = [
   'not really.', 'Stay home. Just... stay home.', 'Maybe today is not your day (^///^)',
   'Good luck.', 'You are Fucked', 'Excellent Luck', 'Very Bad Luck', 'Bad Luck',
@@ -265,15 +299,18 @@ async function handleInteraction(interaction) {
   if (!interaction.isChatInputCommand() || !interaction.guild) return;
   const command = interaction.commandName;
   try {
+    if (command === 'osum') return await osumCommand(interaction, interaction.options);
     if (mongoose.connection.readyState !== 1) return interactionReply(interaction, 'Database temporarily unavailable. Please try again shortly.', true);
     if (['set', 'rule', 'number', 'delink'].includes(command)) return configureSlash(interaction, command);
     if (command === 'osu') {
+      await interaction.deferReply();
       const action = interaction.options.getSubcommand();
       if (action === 'add') return osuCommand(interaction, `add "${interaction.options.getString('username')}"`);
       return osuCommand(interaction, interaction.options.getString('username') || '');
     }
     if (command === 'help') return interactionReply(interaction, [
       'Slash commands:', '/help', '/osu recent', '/osu recent username:<username>', '/osu add username:<username>',
+      '/osum name:<beatmap> ar:9 cs:4', '/osum random:true', 'Prefix: .osum freedom dive ar=9 cs=4 / .osum -r',
       '/set countdown timezone:<GMT+7>', '/set countdown cancel', '/rule set role:@role', '/rule cancel',
       '/number enable', '/number cancel', '/delink set channel:#chat', '/delink cancel', '/status', '/fortune',
       '', 'Configuration commands require the Server Owner, Administrator, or Bot Owner.',
@@ -294,12 +331,14 @@ async function handleInteraction(interaction) {
 async function handleMessage(message) {
   if (!message.guild || message.author.bot || message.webhookId) return;
   try {
-    await inGuildOrder(message.guild.id, async () => {
+    const moderated = await inGuildOrder(message.guild.id, async () => {
       if (mongoose.connection.readyState !== 1) return;
       const settings = await Guild.findOne({ guildId: message.guild.id }).lean();
       if (await moderateLink(message, settings)) return true;
       await countMessage(message, settings);
     });
+    const match = /^\.osum(?:\s+([\s\S]*))?$/i.exec(message.content.trim());
+    if (!moderated && match) await osumCommand(message, match[1] || '');
   } catch {
     logFailure('Message handling');
   }
@@ -333,7 +372,7 @@ async function checkCountdowns() {
       }).catch(() => { logFailure('Guild countdown'); });
     }
     const now = Date.now();
-    for (const map of [warningCooldowns, osuCooldowns]) {
+    for (const map of [warningCooldowns, osuCooldowns, osumCooldowns]) {
       for (const [key, expiry] of map) if (expiry <= now) map.delete(key);
     }
   } catch { logFailure('Countdown scheduler'); }
@@ -398,4 +437,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { parseOffset, countdownDate, hasLink, inGuildOrder, countMessage, configure, configureSlash, isAdmin, canConfigureGuild, moderateLink, checkCountdowns, osuCommand, handleInteraction, client };
+module.exports = { parseOffset, countdownDate, hasLink, inGuildOrder, countMessage, configure, configureSlash, isAdmin, canConfigureGuild, moderateLink, checkCountdowns, osuCommand, osumCommand, handleInteraction, handleMessage, client };
