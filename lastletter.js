@@ -1,6 +1,7 @@
 const { randomInt } = require('node:crypto');
 const { EmbedBuilder, PermissionsBitField, MessageFlags } = require('discord.js');
 const { LastLetterStore } = require('./lastletter-store');
+const { numberReactions } = require('./number-reactions');
 
 let dictionary;
 function englishDictionary() {
@@ -115,9 +116,13 @@ class LastLetter {
     try {
       const result = await this.submit({ guildId: message.guild.id, channelId: message.channel.id,
         userId: message.author.id, content: message.content });
-      // React to the player's message instead of posting gameplay messages.
-      // Discord.js queues reaction requests using Discord's rate-limit buckets.
-      for (const emoji of submissionReactions(result)) await message.react(emoji);
+      try {
+        // Await each request to preserve digit order. Discord.js handles rate
+        // limits. Stop on failure so later digits cannot shift into its place.
+        for await (const emoji of submissionReactions(result, message.client?.application?.emojis)) {
+          await message.react(emoji);
+        }
+      } catch { this.logFailure('Last Letter reactions'); }
       if (result.restarted) {
         await this.send(message.channel, { embeds: [startEmbed(result.game)], allowedMentions: { parse: [] } });
       }
@@ -187,15 +192,12 @@ function startEmbed(game) {
     .setDescription(`Starting letter: **${game.requiredLetter.toUpperCase()}**\nSend one English word in chat.\nAnother player must submit a valid word before you can play again.\nWords cannot repeat during this game.\n\n✅ Accepted • ❌ Rejected • ⏳ Wait for another player\nNumber reactions mark the accepted-word count.`);
 }
 
-function submissionReactions(result) {
-  if (result.code === 'ignored') return [];
-  if (result.code === 'cooldown') return ['⏳'];
-  if (result.code !== 'accepted') return ['❌'];
-  const digits = String(result.game.usedWords.length).split('');
-  // Each emoji can appear only once as a reaction on a message. For counts with
-  // repeated digits, show just ✅ rather than an incorrect truncated number.
-  if (new Set(digits).size !== digits.length) return ['✅'];
-  return ['✅', ...digits.map(digit => `${digit}\uFE0F\u20E3`)];
+async function* submissionReactions(result, applicationEmojis) {
+  if (result.code === 'ignored') return;
+  if (result.code === 'cooldown') { yield '⏳'; return; }
+  if (result.code !== 'accepted') { yield '❌'; return; }
+  yield '✅';
+  yield* numberReactions(result.game.usedWords.length, applicationEmojis);
 }
 
 function resultsEmbed(game) {

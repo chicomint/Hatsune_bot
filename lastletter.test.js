@@ -270,10 +270,13 @@ test('every word receives reactions only, including repeated failures and cooldo
   assert.deepEqual((await state()).usedWords, ['apple', 'elephant', 'tiger']);
 });
 
-test('number reactions match the screenshot’s running accepted-word count and never misrepresent repeated digits', () => {
+test('number reactions match the running accepted-word count, including repeated digits', async () => {
   for (const [count, expected] of [[1, ['✅', '1️⃣']], [123, ['✅', '1️⃣', '2️⃣', '3️⃣']],
-    [124, ['✅', '1️⃣', '2️⃣', '4️⃣']], [10, ['✅', '1️⃣', '0️⃣']], [11, ['✅']], [101, ['✅']]]) {
-    assert.deepEqual(submissionReactions({ code: 'accepted', game: { usedWords: Array(count) } }), expected);
+    [124, ['✅', '1️⃣', '2️⃣', '4️⃣']], [10, ['✅', '1️⃣', '0️⃣']],
+    [11, ['✅', '1️⃣', '🥇']], [101, ['✅', '1️⃣', '0️⃣', '🥇']]]) {
+    const reactions = [];
+    for await (const emoji of submissionReactions({ code: 'accepted', game: { usedWords: Array(count) } })) reactions.push(emoji);
+    assert.deepEqual(reactions, expected);
   }
 });
 
