@@ -3,9 +3,12 @@ const mongoose = require('mongoose');
 const { Client, GatewayIntentBits, PermissionsBitField, ActivityType, version } = require('discord.js');
 const User = require('./models/User');
 const Guild = require('./models/Guild');
+const LastLetterGame = require('./models/LastLetterGame');
+const LastLetterPlayer = require('./models/LastLetterPlayer');
 const { osuGet } = require('./osu');
 const { FinderInputError, USAGE: OSUM_USAGE, parsePrefix, fromSlash, findBeatmap, beatmapEmbed } = require('./beatmap-finder');
 const { PrefixInputError, parsePrefixCommand } = require('./prefix-commands');
+const { LastLetter, englishDictionary } = require('./lastletter');
 
 mongoose.set('bufferCommands', false);
 const P = PermissionsBitField.Flags;
@@ -18,6 +21,7 @@ const queues = new Map();
 const warningCooldowns = new Map();
 const osuCooldowns = new Map();
 const osumCooldowns = new Map();
+const lastLetter = new LastLetter({ send, canSend, logFailure });
 let scheduler;
 let checkingCountdown = false;
 
@@ -302,6 +306,7 @@ async function handleInteraction(interaction) {
   try {
     if (command === 'osum') return await osumCommand(interaction, interaction.options);
     if (mongoose.connection.readyState !== 1) return interactionReply(interaction, 'Database temporarily unavailable. Please try again shortly.', true);
+    if (command === 'lastletter') return await lastLetter.handleInteraction(interaction);
     if (['set', 'rule', 'number', 'delink'].includes(command)) return configureSlash(interaction, command);
     if (command === 'osu') {
       await interaction.deferReply();
@@ -315,6 +320,7 @@ async function handleInteraction(interaction) {
       '/osum name:<beatmap> ar:9 cs:4', '/osum random:true',
       '/set countdown timezone:<GMT+7>', '/set countdown cancel:true', '/rule set role:@role', '/rule cancel',
       '/number enable', '/number cancel', '/delink set channel:#chat', '/delink cancel', '/status', '/fortune',
+      '/lastletter start (admins/owners)', '/lastletter stop (admins/owners)',
       '', 'Prefix commands:', '.help', '.r [username] (alias for /osu recent)',
       '.osu [username]', '.osu recent [username]', '.osu add <username>',
       '.osum freedom dive ar=9 cs=4', '.osum -r',
@@ -322,6 +328,7 @@ async function handleInteraction(interaction) {
       '.number enable', '.number cancel', '.delink set #channel', '.delink cancel', '.status', '.fortune',
       '', 'Configuration commands require the Server Owner, Administrator, or Bot Owner.',
       'Counting starts at 1; wrong numbers reset it. Anti-link exempts owner/Admin, bots, and webhooks.',
+      '', 'Full command guide: <https://ilovehatsunemiku.com/discord-bot>',
     ].join('\n'));
     if (command === 'fortune') return interactionReply(interaction, `**Your Fortune:**\n${fortunes[Math.floor(Math.random() * fortunes.length)]}`);
     if (command === 'status') {
@@ -386,7 +393,10 @@ async function handleMessage(message) {
         return true;
       }
     });
-    if (!handled) await handlePrefix(message);
+    if (!handled) {
+      await handlePrefix(message);
+      if (mongoose.connection.readyState === 1) await lastLetter.handleMessage(message);
+    }
   } catch {
     logFailure('Message handling');
   }
@@ -457,7 +467,9 @@ async function start() {
   seconds('LINK_WARNING_DELETE_SECONDS', 5);
   seconds('OSU_COMMAND_COOLDOWN_SECONDS', 5);
   await mongoose.connect(process.env.MONGODB_URI, { serverSelectionTimeoutMS: 5000, socketTimeoutMS: 15000 });
-  await Promise.all([User.init(), Guild.init()]);
+  await Promise.all([User.init(), Guild.init(), LastLetterGame.init(), LastLetterPlayer.init()]);
+  englishDictionary();
+  await lastLetter.recover();
   console.log('MongoDB connected.');
   client.once('clientReady', () => {
     client.user.setPresence({ activities: [{ name: process.env.BOT_ACTIVITY_NAME || 'Hatsune bot', type, ...(url && { url }) }], status });
@@ -472,6 +484,7 @@ async function shutdown() {
   clearInterval(scheduler);
   client.destroy();
   await Promise.allSettled([...queues.values()]);
+  await lastLetter.drain();
   await mongoose.disconnect();
 }
 if (require.main === module) {
@@ -485,4 +498,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { parseOffset, countdownDate, hasLink, inGuildOrder, countMessage, configure, configureSlash, isAdmin, canConfigureGuild, moderateLink, checkCountdowns, osuCommand, osumCommand, handleInteraction, handleMessage, client };
+module.exports = { parseOffset, countdownDate, hasLink, inGuildOrder, countMessage, configure, configureSlash, isAdmin, canConfigureGuild, moderateLink, checkCountdowns, osuCommand, osumCommand, handleInteraction, handleMessage, lastLetter, client };

@@ -8,6 +8,7 @@ if (!process.env.DISCORD_TOKEN || !process.env.DISCORD_CLIENT_ID) {
 const commands = [
   new SlashCommandBuilder().setName('help').setDescription("Show Hatsune bot's commands"),
   require('./osum-command'),
+  require('./lastletter-command'),
   new SlashCommandBuilder().setName('osu').setDescription('View recent osu!standard plays')
     .addSubcommand(sub => sub.setName('recent').setDescription('View a recent play').addStringOption(option => option.setName('username').setDescription('Optional osu! username')))
     .addSubcommand(sub => sub.setName('add').setDescription('Link your osu! account').addStringOption(option => option.setName('username').setDescription('osu! username').setRequired(true))),

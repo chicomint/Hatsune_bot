@@ -369,7 +369,12 @@ test('slash definition has all optional types/ranges and registration retains ev
   assert.equal(registration.route, Routes.applicationCommands('1234567890'));
   const names = registration.body.body.map(c => c.name);
   assert.equal(new Set(names).size, names.length);
-  assert.deepEqual(names.sort(), ['delink', 'fortune', 'help', 'number', 'osu', 'osum', 'rule', 'set', 'status']);
+  assert.deepEqual(names.sort(), ['delink', 'fortune', 'help', 'lastletter', 'number', 'osu', 'osum', 'rule', 'set', 'status']);
+  const lastletter = registration.body.body.find(command => command.name === 'lastletter');
+  assert.deepEqual(lastletter.options.map(subcommand => subcommand.name), ['start', 'stop']);
+  assert.ok(lastletter.options.every(subcommand => subcommand.options.length === 1
+    && subcommand.options[0].name === 'channel' && subcommand.options[0].type === ApplicationCommandOptionType.Channel
+    && !subcommand.options[0].required));
 });
 
 test('osu! client honors Retry-After without repeatedly hitting a limited API', async () => {

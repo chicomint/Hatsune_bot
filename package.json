@@ -4,14 +4,17 @@
   "private": true,
   "description": "A small Discord bot with MongoDB persistence",
   "main": "index.js",
-  "engines": { "node": ">=22.12.0" },
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "scripts": {
     "start": "node index.js",
     "register": "node deploy-commands.js",
-    "test": "node --test bot.test.js beatmap-finder.test.js prefix-commands.test.js",
-    "check": "node --check index.js && node --check osu.js && node --check beatmap-finder.js && node --check osum-command.js && node --check prefix-commands.js && node --check deploy-commands.js && node --check models/User.js && node --check models/Guild.js"
+    "test": "node --test bot.test.js beatmap-finder.test.js prefix-commands.test.js lastletter.test.js lastletter-store.test.js",
+    "check": "node --check index.js && node --check osu.js && node --check beatmap-finder.js && node --check osum-command.js && node --check prefix-commands.js && node --check lastletter.js && node --check lastletter-store.js && node --check lastletter-command.js && node --check deploy-commands.js && node --check models/User.js && node --check models/Guild.js && node --check models/LastLetterGame.js && node --check models/LastLetterPlayer.js"
   },
   "dependencies": {
+    "an-array-of-english-words": "2.0.0",
     "discord.js": "14.27.0",
     "dotenv": "18.0.2",
     "mongoose": "9.10.1"
