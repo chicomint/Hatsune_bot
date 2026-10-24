@@ -88,9 +88,11 @@ class LastLetter {
       let player = players.find(entry => entry.userId === userId);
       if (!player) { player = { userId, currentStreak: 0, highestStreak: 0, validWords: 0 }; players.push(player); }
       if (code !== 'accepted') {
-        player.currentStreak = 0;
-        const saved = await this.store.commit(game, { players });
-        return saved ? { code, game: saved } : null;
+        // A rejected answer ends the current round for everyone. Keep the game
+        // active and immediately open a clean round with a fresh starting letter.
+        const saved = await this.store.commit(game, { active: true, requiredLetter: this.pickLetter(),
+          lastPlayerId: null, usedWords: [], players: [], startedAt: new Date(), stoppedAt: null });
+        return saved ? { code, game: saved, restarted: true } : null;
       }
       player.currentStreak++;
       player.validWords++;
@@ -116,6 +118,9 @@ class LastLetter {
       // React to the player's message instead of posting gameplay messages.
       // Discord.js queues reaction requests using Discord's rate-limit buckets.
       for (const emoji of submissionReactions(result)) await message.react(emoji);
+      if (result.restarted) {
+        await this.send(message.channel, { embeds: [startEmbed(result.game)], allowedMentions: { parse: [] } });
+      }
     } catch { this.logFailure('Last Letter submission'); }
   }
 
