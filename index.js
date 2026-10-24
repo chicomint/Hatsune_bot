@@ -5,6 +5,7 @@ const User = require('./models/User');
 const Guild = require('./models/Guild');
 const { osuGet } = require('./osu');
 const { FinderInputError, USAGE: OSUM_USAGE, parsePrefix, fromSlash, findBeatmap, beatmapEmbed } = require('./beatmap-finder');
+const { PrefixInputError, parsePrefixCommand } = require('./prefix-commands');
 
 mongoose.set('bufferCommands', false);
 const P = PermissionsBitField.Flags;
@@ -102,7 +103,7 @@ async function configureSlash(interaction, command) {
   if (command === 'set') {
     const action = interaction.options.getSubcommand();
     const timezone = interaction.options.getString('timezone');
-    const cancel = action === 'cancel';
+    const cancel = action === 'cancel' || interaction.options.getBoolean('cancel') === true;
     if (cancel) { await Guild.updateOne({ guildId }, { $unset: { countdown: 1 } }); return interactionReply(interaction, 'Countdown disabled for this server.', true); }
     const offset = parseOffset(timezone || '');
     if (offset === null) return interactionReply(interaction, 'Use GMT+7, UTC-5, or UTC+5:30 (UTC-12 to UTC+14).', true);
@@ -136,7 +137,7 @@ async function configureSlash(interaction, command) {
     return interactionReply(interaction, `Anti-link enabled in <#${channel.id}>. Owner/Admin messages are exempt.`, true);
   }
 }
-// Kept as a small test/helper adapter; production configuration is dispatched only through interactions.
+// Legacy helper retained for existing callers and regression tests.
 async function configure(message, command, args) {
   const options = new Map();
   const value = args === 'cancel' ? true : args;
@@ -306,13 +307,19 @@ async function handleInteraction(interaction) {
       await interaction.deferReply();
       const action = interaction.options.getSubcommand();
       if (action === 'add') return osuCommand(interaction, `add "${interaction.options.getString('username')}"`);
-      return osuCommand(interaction, interaction.options.getString('username') || '');
+      const username = interaction.options.getString('username');
+      return osuCommand(interaction, username ? `"${username}"` : '');
     }
     if (command === 'help') return interactionReply(interaction, [
       'Slash commands:', '/help', '/osu recent', '/osu recent username:<username>', '/osu add username:<username>',
-      '/osum name:<beatmap> ar:9 cs:4', '/osum random:true', 'Prefix: .osum freedom dive ar=9 cs=4 / .osum -r',
-      '/set countdown timezone:<GMT+7>', '/set countdown cancel', '/rule set role:@role', '/rule cancel',
+      '/osum name:<beatmap> ar:9 cs:4', '/osum random:true',
+      '/set countdown timezone:<GMT+7>', '/set countdown cancel:true', '/rule set role:@role', '/rule cancel',
       '/number enable', '/number cancel', '/delink set channel:#chat', '/delink cancel', '/status', '/fortune',
+      '', 'Prefix commands:', '.help', '.r [username] (alias for /osu recent)',
+      '.osu [username]', '.osu recent [username]', '.osu add <username>',
+      '.osum freedom dive ar=9 cs=4', '.osum -r',
+      '.set countdown GMT+7', '.set countdown cancel', '.rule set @role', '.rule cancel',
+      '.number enable', '.number cancel', '.delink set #channel', '.delink cancel', '.status', '.fortune',
       '', 'Configuration commands require the Server Owner, Administrator, or Bot Owner.',
       'Counting starts at 1; wrong numbers reset it. Anti-link exempts owner/Admin, bots, and webhooks.',
     ].join('\n'));
@@ -328,17 +335,58 @@ async function handleInteraction(interaction) {
   } catch { logFailure('Interaction handling'); if (!interaction.replied) await interactionReply(interaction, 'Something went wrong. Please try again shortly.', true); }
 }
 
+async function handlePrefix(message) {
+  let parsed;
+  try { parsed = parsePrefixCommand(message.content); }
+  catch (error) {
+    if (error instanceof PrefixInputError) return reply(message, error.message);
+    throw error;
+  }
+  if (!parsed) return;
+  if (parsed.command === 'osum') return osumCommand(message, parsed.args);
+  const values = parsed.values;
+  // Adapt message input to the shared command handler without spreading Discord
+  // objects: guild/member/channel properties may be inherited getters.
+  const context = {
+    guild: message.guild, member: message.member, user: message.author,
+    channel: message.channel, channelId: message.channel.id, commandName: parsed.command,
+    isChatInputCommand: () => true, replied: false, deferred: false,
+    options: {
+      getSubcommand: () => parsed.subcommand,
+      getString: name => values[name] ?? null,
+      getBoolean: name => values[name] ?? null,
+      getRole: async name => values[name] ? message.guild.roles.fetch(values[name]).catch(() => null) : null,
+      getChannel: async name => values[name] ? message.guild.channels.fetch(values[name]).catch(() => null) : null,
+    },
+    deferReply: async () => { context.deferred = true; },
+  };
+  const respond = async payload => {
+    const { ephemeral, flags, ...body } = payload;
+    const sent = await reply(message, body);
+    context.replied = true;
+    return sent;
+  };
+  context.reply = respond;
+  context.editReply = respond;
+  context.followUp = respond;
+  return handleInteraction(context);
+}
+
 async function handleMessage(message) {
   if (!message.guild || message.author.bot || message.webhookId) return;
   try {
-    const moderated = await inGuildOrder(message.guild.id, async () => {
+    const command = /^\.([a-z]+)(?:\s|$)/i.exec(message.content.trim())?.[1].toLowerCase();
+    const handled = await inGuildOrder(message.guild.id, async () => {
       if (mongoose.connection.readyState !== 1) return;
       const settings = await Guild.findOne({ guildId: message.guild.id }).lean();
       if (await moderateLink(message, settings)) return true;
       await countMessage(message, settings);
+      if (['set', 'rule', 'number', 'delink'].includes(command)) {
+        await handlePrefix(message);
+        return true;
+      }
     });
-    const match = /^\.osum(?:\s+([\s\S]*))?$/i.exec(message.content.trim());
-    if (!moderated && match) await osumCommand(message, match[1] || '');
+    if (!handled) await handlePrefix(message);
   } catch {
     logFailure('Message handling');
   }
